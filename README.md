@@ -2,8 +2,7 @@
 
 A user-friendly GUI for `yt-dlp` to easily clip and download sections of YouTube videos with customizable quality and format.
 
-![KayClipper Screenshot](https_placeholder_for_screenshot.png) 
-*(A screenshot would go here)*
+![KayClipper Screenshot](https://github.com/user-attachments/assets/31bdd0b6-0243-4ce3-a414-c64eff380c76)
 
 ## Features
 

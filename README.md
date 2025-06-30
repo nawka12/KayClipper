@@ -62,6 +62,8 @@ The text box at the bottom will show the progress and any success or error messa
 
 ## Building the Executable
 
+For convenience, pre-built executables for Windows are available on the [Releases page](https://github.com/nawka12/KayClipper/releases). If you prefer to build it yourself, follow the steps below.
+
 This project can be packaged into a single `.exe` file for easy distribution on Windows.
 
 1.  **Install all dependencies**, including `pyinstaller`:

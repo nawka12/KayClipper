@@ -9,6 +9,7 @@ import zipfile
 import io
 import stat
 import re
+import yt_dlp
 
 # --- Appearance ---
 ctk.set_appearance_mode("Dark")
@@ -36,10 +37,8 @@ class KayClipperApp(ctk.CTk):
         self.bin_dir = get_resource_path("bin")
         os.makedirs(self.bin_dir, exist_ok=True)
         
-        yt_dlp_exe = "yt-dlp.exe" if sys.platform == "win32" else "yt-dlp"
         ffmpeg_exe = "ffmpeg.exe" if sys.platform == "win32" else "ffmpeg"
         
-        self.yt_dlp_path = os.path.join(self.bin_dir, yt_dlp_exe)
         self.ffmpeg_path = os.path.join(self.bin_dir, ffmpeg_exe)
         
         self.deps_ok = False
@@ -150,31 +149,14 @@ class KayClipperApp(ctk.CTk):
 
 
     def check_dependencies(self):
-        """Check for yt-dlp and ffmpeg on a background thread."""
+        """Check for ffmpeg on a background thread."""
         threading.Thread(target=self._check_dependencies_and_prompt, daemon=True).start()
 
     def _check_dependencies_and_prompt(self):
         """Check for dependencies and prompt user to download if missing."""
         self.log_message("🔎 Checking for dependencies...")
-        yt_dlp_ok = False
+        # yt-dlp is now a package, so we only need to check for ffmpeg
         ffmpeg_ok = False
-
-        # --- Check for yt-dlp ---
-        try:
-            # Check local bin directory first
-            subprocess.run([self.yt_dlp_path, '--version'], check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
-            yt_dlp_ok = True
-            self.log_message("✅ yt-dlp found locally.")
-        except (OSError, subprocess.CalledProcessError):
-            try:
-                # If not found or not working, check system PATH
-                subprocess.run(['yt-dlp', '--version'], check=True, capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
-                self.yt_dlp_path = 'yt-dlp'  # Use system version
-                yt_dlp_ok = True
-                self.log_message("✅ yt-dlp found in system PATH.")
-            except (OSError, subprocess.CalledProcessError):
-                self.log_message("❌ yt-dlp not found.", is_error=True)
-                self.after(0, lambda: self.prompt_download("yt-dlp"))
 
         # --- Check for ffmpeg ---
         try:
@@ -193,7 +175,7 @@ class KayClipperApp(ctk.CTk):
                 self.log_message("❌ FFmpeg not found.", is_error=True)
                 self.after(0, lambda: self.prompt_download("ffmpeg"))
 
-        if yt_dlp_ok and ffmpeg_ok:
+        if ffmpeg_ok:
             self.deps_ok = True
             self.after(0, self.on_deps_ready)
 
@@ -218,31 +200,9 @@ class KayClipperApp(ctk.CTk):
         if not answer:
             self.log_message(f"❌ Download for {dependency_name} cancelled by user.", is_error=True)
             return
-
-        downloader = self.download_yt_dlp if dependency_name == "yt-dlp" else self.download_ffmpeg
-        threading.Thread(target=downloader, daemon=True).start()
-
-    def download_yt_dlp(self):
-        """Downloads the latest yt-dlp executable."""
-        self.log_message("⬇️ Downloading yt-dlp...")
-        try:
-            url = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe" if sys.platform == "win32" else "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
-            response = requests.get(url, stream=True)
-            response.raise_for_status()
-
-            with open(self.yt_dlp_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            if sys.platform != "win32":
-                st = os.stat(self.yt_dlp_path)
-                os.chmod(self.yt_dlp_path, st.st_mode | stat.S_IEXEC)
-
-            self.log_message("✅ yt-dlp downloaded successfully.")
-            # Re-run the dependency check to confirm and enable the button
-            self._check_dependencies_and_prompt()
-        except Exception as e:
-            self.log_message(f"❌ Failed to download yt-dlp: {e}", is_error=True)
+        
+        if dependency_name == "ffmpeg":
+            threading.Thread(target=self.download_ffmpeg, daemon=True).start()
 
     def download_ffmpeg(self):
         """Downloads and extracts ffmpeg."""
@@ -259,6 +219,7 @@ class KayClipperApp(ctk.CTk):
 
             with zipfile.ZipFile(io.BytesIO(response.content)) as z:
                 extracted_ffmpeg = False
+                extracted_ffprobe = False
                 for file_info in z.infolist():
                     # Look for ffmpeg.exe and ffprobe.exe inside a 'bin' folder in the zip
                     filename = os.path.basename(file_info.filename)
@@ -270,11 +231,12 @@ class KayClipperApp(ctk.CTk):
                         ffprobe_path = os.path.join(self.bin_dir, "ffprobe.exe")
                         with z.open(file_info) as source, open(ffprobe_path, 'wb') as target:
                             target.write(source.read())
+                        extracted_ffprobe = True
 
-                if not extracted_ffmpeg:
-                    raise FileNotFoundError("Could not find ffmpeg.exe in the downloaded archive.")
+                if not extracted_ffmpeg or not extracted_ffprobe:
+                    raise FileNotFoundError("Could not find ffmpeg.exe and/or ffprobe.exe in the downloaded archive.")
 
-            self.log_message("✅ FFmpeg downloaded and extracted successfully.")
+            self.log_message("✅ FFmpeg and ffprobe downloaded and extracted successfully.")
             # Re-run the dependency check to confirm and enable the button
             self._check_dependencies_and_prompt()
         except Exception as e:
@@ -329,9 +291,9 @@ class KayClipperApp(ctk.CTk):
             self.log_message("ℹ️ No supported GPU for hardware acceleration was found. Using CPU.")
 
     def parse_time_to_seconds(self, time_str):
-        """Converts HH:MM:SS or seconds string to total seconds. Returns None on error."""
+        """Converts HH:MM:SS or seconds string to total seconds. Returns None on error or empty string."""
         if not time_str:
-            return 0  # Treat empty string as 0 for comparison
+            return None
         try:
             if ':' in time_str:
                 parts = time_str.split(':')
@@ -351,9 +313,40 @@ class KayClipperApp(ctk.CTk):
         thread = threading.Thread(target=self.clip_video, daemon=True)
         thread.start()
 
-    def update_progress(self, value):
-        """Update the progress bar value."""
-        self.progress_bar.set(value)
+    class YTDLLogger:
+        def __init__(self, app_instance):
+            self.app = app_instance
+
+        def debug(self, msg):
+            # For now, we ignore debug messages from yt-dlp
+            if msg.startswith('[debug] '):
+                pass
+            else:
+                self.info(msg)
+
+        def info(self, msg):
+            # You can decide if you want to show these in your console
+            pass
+
+        def warning(self, msg):
+            self.app.log_message(f"⚠️ {msg}")
+
+        def error(self, msg):
+            self.app.log_message(f"❌ {msg}", is_error=True)
+
+    def update_progress(self, d):
+        """Hook for yt-dlp to update the progress bar."""
+        if d['status'] == 'downloading':
+            p = d['_percent_str']
+            p = p.replace('%','').strip()
+            try:
+                percent = float(p)
+                self.after(0, self.progress_bar.set, percent / 100.0)
+            except ValueError:
+                # Handle cases where percentage is not a number
+                pass
+        if d['status'] == 'finished':
+            self.after(0, self.progress_bar.set, 1.0)
 
     def clip_video(self):
         """The main clipping logic."""
@@ -375,81 +368,84 @@ class KayClipperApp(ctk.CTk):
         start_seconds = self.parse_time_to_seconds(start_time_str)
         end_seconds = self.parse_time_to_seconds(end_time_str)
 
-        if start_seconds is None:
+        if start_time_str and start_seconds is None:
             self.log_message(f"❌ Error: Invalid start time format: '{start_time_str}'.", is_error=True)
             self.after(0, self.reset_ui_state)
             return
-        if end_seconds is None:
+        if end_time_str and end_seconds is None:
             self.log_message(f"❌ Error: Invalid end time format: '{end_time_str}'.", is_error=True)
             self.after(0, self.reset_ui_state)
             return
 
-        if start_time_str and end_time_str and start_seconds >= end_seconds:
+        if start_seconds is not None and end_seconds is not None and start_seconds >= end_seconds:
             self.log_message("❌ Error: Start time must be less than end time.", is_error=True)
             self.after(0, self.reset_ui_state)
             return
-
+            
         # --- Build Command ---
-        command = [self.yt_dlp_path]
-        
-        # Tell yt-dlp where ffmpeg is, especially if we downloaded it
-        command.extend(['--ffmpeg-location', self.bin_dir])
+        # yt-dlp's template processing will add the extension. We provide the path without it.
+        output_template, _ = os.path.splitext(output_filename)
+        ydl_opts = {
+            'format': quality,
+            'outtmpl': output_template,
+            'quiet': True,
+            'noplaylist': True,
+            'progress_hooks': [self.update_progress],
+            'logger': self.YTDLLogger(self),
+        }
+
+        # If ffmpeg is in the system path, self.ffmpeg_path is 'ffmpeg'.
+        # In this case, we don't set ffmpeg_location and let yt-dlp find it.
+        # Otherwise, self.ffmpeg_path is an absolute path to our local executable,
+        # and we must specify its directory.
+        if self.ffmpeg_path != 'ffmpeg':
+            ydl_opts['ffmpeg_location'] = os.path.dirname(self.ffmpeg_path)
         
         # Add download sections for clipping if a time range is specified
         if start_time_str or end_time_str:
-            command.extend(['--download-sections', f"*{start_time_str}-{end_time_str}"])
-            # Force ffmpeg for accurate seeking only when clipping
-            command.extend(['--force-keyframes-at-cuts'])
-
-        # Format selection
-        command.extend(['-f', quality])
+            # yt-dlp expects a list of tuples for time ranges
+            start_clip = start_seconds or 0
+            end_clip = end_seconds or float('inf')
+            download_ranges = yt_dlp.utils.download_range_func(None, [(start_clip, end_clip)])
+            ydl_opts['download_ranges'] = download_ranges
+            ydl_opts['force_keyframes_at_cuts'] = True
 
         # Recode if necessary
         is_audio_only = video_format in ['mp3', 'wav', 'aac']
+        postprocessors = []
         if is_audio_only:
-            command.extend(['--extract-audio', '--audio-format', video_format])
+            postprocessors.append({
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': video_format,
+            })
         else:
             # For video, always recode to ensure the format is correct
-            command.extend(['--recode-video', video_format])
-            if self.gpu_codec:
-                # If a supported GPU is found, add the necessary args for hardware encoding
-                self.log_message(f"🚀 Using {self.gpu_vendor} GPU for faster processing.")
-                command.extend(['--postprocessor-args', f'VideoConvertor:-c:v {self.gpu_codec}'])
+            postprocessors.append({
+                'key': 'FFmpegVideoConvertor',
+                'preferedformat': video_format,
+            })
 
-        # Output
-        command.extend(['-o', output_filename, url])
-        
-        # Suppress verbose output
-        command.extend(['--quiet', '--progress', '--no-warnings'])
+        if self.gpu_codec and not is_audio_only:
+             self.log_message(f"🚀 Using {self.gpu_vendor} GPU for faster processing.")
+             # Arguments for ffmpeg to use hardware decoding and keep frames on GPU
+             hwaccel_args = ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda']
+             ydl_opts.setdefault('postprocessor_args', {})
+             # The key must match the postprocessor's 'key' field, which is 'FFmpegVideoConvertor'
+             # We extend the list with our hwaccel args and the encoding args
+             ydl_opts['postprocessor_args']['FFmpegVideoConvertor'] = hwaccel_args + ['-c:v', self.gpu_codec]
+
+        if postprocessors:
+            ydl_opts['postprocessors'] = postprocessors
 
         # --- Execute Command ---
         self.log_message(f"▶️ Starting clip for: {url}")
         
         try:
-            # Using CREATE_NO_WINDOW to prevent console popup on Windows
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8', creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
-            
-            # Real-time progress parsing from stdout
-            for line in iter(process.stdout.readline, ''):
-                match = re.search(r"\[download\]\s+([0-9\.]+)%", line)
-                if match:
-                    percent = float(match.group(1))
-                    self.after(0, self.update_progress, percent / 100.0)
-
-            # Wait for the process to finish and get the output
-            stderr = process.stderr.read()
-            process.wait()
-
-            if process.returncode == 0:
-                self.log_message(f"✅ Success! Clip saved to: {output_filename}")
-                self.after(0, self.update_progress, 1.0) # Set to 100% on success
-            else:
-                self.log_message(f"❌ Error during clipping process.", is_error=True)
-                if stderr:
-                    self.log_message(f"Details: {stderr.strip()}", is_error=True)
-
-        except FileNotFoundError:
-            self.log_message("❌ Error: yt-dlp or ffmpeg not found. Please ensure they are installed and in your PATH.", is_error=True)
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+            self.log_message(f"✅ Success! Clip saved to: {output_filename}")
+        except yt_dlp.utils.DownloadError as e:
+            self.log_message(f"❌ Error during clipping process: {e}", is_error=True)
         except Exception as e:
             self.log_message(f"❌ An unexpected error occurred: {e}", is_error=True)
         finally:

@@ -1,11 +1,9 @@
 # build.py
 import os
 import sys
-import subprocess
 import requests
 import zipfile
 import io
-import stat
 import shutil
 from pathlib import Path
 
@@ -15,24 +13,7 @@ SCRIPT_FILE = "kay_clipper.py"
 BIN_DIR = Path("bin")
 
 # --- URLs for Dependencies ---
-YT_DLP_URL_WIN = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
-YT_DLP_URL_NIX = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
 FFMPEG_URL_WIN = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-
-def download_file(url, path):
-    """Downloads a file and saves it to a given path."""
-    print(f"Downloading {url} to {path}...")
-    try:
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        with open(path, 'wb') as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        print("Download complete.")
-        return True
-    except requests.exceptions.RequestException as e:
-        print(f"Error downloading {url}: {e}", file=sys.stderr)
-        return False
 
 def download_and_extract_zip(url, target_dir):
     """Downloads and extracts specific files from a zip archive."""
@@ -55,34 +36,24 @@ def download_and_extract_zip(url, target_dir):
         return False
 
 def setup_dependencies():
-    """Ensures yt-dlp and ffmpeg are present in the bin directory."""
+    """Ensures ffmpeg is present in the bin directory for Windows builds."""
     print("--- Checking Dependencies ---")
     BIN_DIR.mkdir(exist_ok=True)
 
     if sys.platform == "win32":
-        # Handle yt-dlp for Windows
-        yt_dlp_path = BIN_DIR / "yt-dlp.exe"
-        if not yt_dlp_path.exists():
-            if not download_file(YT_DLP_URL_WIN, yt_dlp_path):
-                sys.exit(1)
-
-        # Handle ffmpeg for Windows
+        # Handle ffmpeg for Windows. yt-dlp is now a Python package dependency
+        # and will be handled by PyInstaller automatically.
         ffmpeg_path = BIN_DIR / "ffmpeg.exe"
-        if not ffmpeg_path.exists():
+        ffprobe_path = BIN_DIR / "ffprobe.exe"
+        if not ffmpeg_path.exists() or not ffprobe_path.exists():
+            print("ffmpeg.exe or ffprobe.exe not found, downloading...")
             if not download_and_extract_zip(FFMPEG_URL_WIN, BIN_DIR):
                 sys.exit(1)
+        else:
+            print("ffmpeg.exe and ffprobe.exe already present in bin/.")
     else:
-        # Handle yt-dlp for Linux/macOS
-        yt_dlp_path = BIN_DIR / "yt-dlp"
-        if not yt_dlp_path.exists():
-            if not download_file(YT_DLP_URL_NIX, yt_dlp_path):
-                sys.exit(1)
-            # Make it executable
-            st = os.stat(yt_dlp_path)
-            os.chmod(yt_dlp_path, st.st_mode | stat.S_IEXEC)
-        
         # For Linux/macOS, we'll assume ffmpeg is in the PATH.
-        # Bundling it is more complex due to system variations.
+        # The app itself will handle downloading it if it's missing at runtime.
         print("Assuming 'ffmpeg' is installed and in the system PATH for non-Windows OS.")
 
     print("--- Dependencies are ready ---")

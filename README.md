@@ -8,7 +8,7 @@ A user-friendly GUI for `yt-dlp` to easily clip and download sections of YouTube
 
 -   **Easy-to-use Interface**: No command-line knowledge required.
 -   **Flexible Downloading**: Download full videos or clip specific sections by leaving start/end times blank.
--   **Automatic Dependency Handling**: Automatically downloads `yt-dlp` and `ffmpeg` on Windows if they are missing.
+-   **Automatic FFmpeg Handling**: The application will detect if `ffmpeg` is missing and offer to download it automatically, ensuring it works out-of-the-box on any OS.
 -   **GPU-Accelerated Encoding**: Utilizes NVIDIA (NVENC), AMD (AMF), or Intel (QSV) GPUs on Windows for faster video processing.
 -   **Quality & Format Selection**: Choose from presets like 1080p, 720p, etc., and save as `mp4`, `webm`, `mkv`, and more.
 -   **Audio-Only Extraction**: Directly extract audio to `mp3`, `wav`, or `aac`.
@@ -17,12 +17,7 @@ A user-friendly GUI for `yt-dlp` to easily clip and download sections of YouTube
 ## Prerequisites
 
 -   **Python 3**: [Download Python](https://www.python.org/downloads/)
-
-For **Windows users**, `yt-dlp` and `ffmpeg` are not strictly required beforehand. The application will detect if they are missing and offer to download them for you into a local `bin` folder.
-
-For **macOS and Linux users**, you must install `yt-dlp` and `ffmpeg` manually and ensure they are available in your system's PATH.
--   **yt-dlp**: [Installation instructions](https://github.com/yt-dlp/yt-dlp#installation).
--   **FFmpeg**: [Download FFmpeg](https://ffmpeg.org/download.html) or install via a package manager (e.g., `sudo apt install ffmpeg` or `brew install ffmpeg`).
+-   **FFmpeg** (Optional): While the app can download `ffmpeg` for you, having it pre-installed on your system (and available in your PATH) can be more reliable. You can install it via a package manager (e.g., `sudo apt install ffmpeg` or `brew install ffmpeg`).
 
 ## Installation
 
@@ -38,7 +33,7 @@ For **macOS and Linux users**, you must install `yt-dlp` and `ffmpeg` manually a
     # On macOS/Linux:
     source venv/bin/activate
     ```
-3.  Install the required Python packages:
+3.  Install the required Python packages, which includes `yt-dlp`:
     ```bash
     pip install -r requirements.txt
     ```
@@ -64,7 +59,7 @@ The text box at the bottom will show the progress and any success or error messa
 
 For convenience, pre-built executables for Windows are available on the [Releases page](https://github.com/nawka12/KayClipper/releases). If you prefer to build it yourself, follow the steps below.
 
-This project can be packaged into a single `.exe` file for easy distribution on Windows.
+This project can be packaged into a single `.exe` file for easy distribution.
 
 1.  **Install all dependencies**, including `pyinstaller`:
     ```bash
@@ -77,16 +72,18 @@ This project can be packaged into a single `.exe` file for easy distribution on 
     ```
 
 This script will:
--   Automatically download `yt-dlp.exe` and `ffmpeg.exe` into a temporary `bin` folder.
--   Run `PyInstaller` with all the necessary settings to bundle your application, its dependencies, and the required assets into a single file.
+-   On Windows, automatically download `ffmpeg.exe` and `ffprobe.exe` into a `bin` folder if they are missing. This folder will be bundled with the app.
+-   Run `PyInstaller` with all the necessary settings to bundle the application, its Python dependencies (like `yt-dlp` and `customtkinter`), and the required assets into a single file.
 
-The final executable will be located in the `dist` folder, named `KayClipper.exe`.
+The final executable will be located in the `dist` folder.
 
 ## How It Works
 
-This application constructs and executes a `yt-dlp` command in the background based on your inputs. It uses multi-threading to ensure the user interface doesn't freeze during the download and clipping process. 
+This application uses the `yt-dlp` Python library to handle the downloading and processing of videos. It constructs a dictionary of options based on your inputs and passes it to `yt-dlp`'s main function. This provides more robust integration than calling the command-line tool.
 
-On startup, it detects the user's GPU (on Windows) and will automatically add the correct arguments (`-c:v h264_nvenc`, etc.) to leverage hardware acceleration for video encoding, which significantly speeds up the process. The key `yt-dlp` features it uses are `--download-sections` and `--force-keyframes-at-cuts` for efficient and accurate clipping. 
+The application runs the clipping process in a separate thread to ensure the user interface remains responsive. Progress hooks from `yt-dlp` are used to update the progress bar in real-time.
+
+On startup, it detects the user's GPU (on Windows) and will automatically add the correct `ffmpeg` arguments to the `yt-dlp` options. This leverages hardware acceleration for both decoding and encoding (`-hwaccel cuda`, `-c:v h264_nvenc`, etc.), which significantly speeds up the transcoding process by keeping the video frames on the GPU.
 
 ## License
 

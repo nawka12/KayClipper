@@ -10,6 +10,7 @@ import io
 import stat
 import re
 import yt_dlp
+import shutil
 
 # --- Appearance ---
 ctk.set_appearance_mode("Dark")
@@ -243,52 +244,102 @@ class KayClipperApp(ctk.CTk):
             self.log_message(f"❌ Failed to download FFmpeg: {e}", is_error=True)
 
     def _detect_gpu(self):
-        """Detect GPU on Windows to enable hardware acceleration."""
+        """Detect GPU and select appropriate encoder/flags per OS."""
         self.log_message("🔎 Detecting GPU for hardware acceleration...")
-        if sys.platform != "win32":
-            self.log_message("ℹ️ GPU detection is only supported on Windows.")
-            return
-
-        gpu_name = ""
-        # Try PowerShell first (more modern and reliable)
-        try:
-            flags = subprocess.CREATE_NO_WINDOW
-            command = [
-                'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-                "Get-CimInstance -ClassName Win32_VideoController | Select-Object -ExpandProperty Name"
-            ]
-            result = subprocess.run(command, check=True, capture_output=True, text=True, creationflags=flags)
-            gpu_name = result.stdout.lower()
-            self.log_message("ℹ️ GPU detection using PowerShell successful.")
-        except (FileNotFoundError, subprocess.CalledProcessError):
-            # Fallback to WMIC if PowerShell fails
-            self.log_message("⚠️ PowerShell method failed, falling back to WMIC.")
+        if sys.platform == "win32":
+            gpu_name = ""
+            # Try PowerShell first (more modern and reliable)
             try:
                 flags = subprocess.CREATE_NO_WINDOW
-                result = subprocess.run(
-                    ['wmic', 'path', 'win32_VideoController', 'get', 'name'],
-                    check=True, capture_output=True, text=True, creationflags=flags
-                )
+                command = [
+                    'powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+                    "Get-CimInstance -ClassName Win32_VideoController | Select-Object -ExpandProperty Name"
+                ]
+                result = subprocess.run(command, check=True, capture_output=True, text=True, creationflags=flags)
                 gpu_name = result.stdout.lower()
-                self.log_message("ℹ️ GPU detection using WMIC successful.")
+                self.log_message("ℹ️ GPU detection using PowerShell successful.")
             except (FileNotFoundError, subprocess.CalledProcessError):
-                self.log_message("❌ Could not detect GPU using PowerShell or WMIC. Using CPU for encoding.", is_error=True)
+                # Fallback to WMIC if PowerShell fails
+                self.log_message("⚠️ PowerShell method failed, falling back to WMIC.")
+                try:
+                    flags = subprocess.CREATE_NO_WINDOW
+                    result = subprocess.run(
+                        ['wmic', 'path', 'win32_VideoController', 'get', 'name'],
+                        check=True, capture_output=True, text=True, creationflags=flags
+                    )
+                    gpu_name = result.stdout.lower()
+                    self.log_message("ℹ️ GPU detection using WMIC successful.")
+                except (FileNotFoundError, subprocess.CalledProcessError):
+                    self.log_message("❌ Could not detect GPU using PowerShell or WMIC. Using CPU for encoding.", is_error=True)
+                    return
+
+            if 'nvidia' in gpu_name:
+                self.gpu_vendor = "NVIDIA"
+                self.gpu_codec = "h264_nvenc"
+            elif 'amd' in gpu_name or 'advanced micro devices' in gpu_name or 'ati' in gpu_name:
+                self.gpu_vendor = "AMD"
+                self.gpu_codec = "h264_amf"
+            elif 'intel' in gpu_name:
+                self.gpu_vendor = "Intel"
+                self.gpu_codec = "h264_qsv"
+
+        elif sys.platform.startswith("linux"):
+            # Prefer direct NVIDIA query if available
+            try:
+                if shutil.which('nvidia-smi'):
+                    result = subprocess.run(['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
+                                            check=True, capture_output=True, text=True)
+                    if result.stdout.strip():
+                        self.gpu_vendor = "NVIDIA"
+                        self.gpu_codec = "h264_nvenc"
+            except (FileNotFoundError, subprocess.CalledProcessError):
+                pass
+
+            # If not NVIDIA, fall back to lspci to detect Intel/AMD
+            if not self.gpu_vendor:
+                try:
+                    if shutil.which('lspci'):
+                        result = subprocess.run(['lspci', '-nnk'], check=True, capture_output=True, text=True)
+                        gpu_info = result.stdout.lower()
+                        if any(v in gpu_info for v in ['amd', 'advanced micro devices', 'ati']):
+                            self.gpu_vendor = "AMD"
+                            self.gpu_codec = "h264_vaapi"
+                        elif 'intel' in gpu_info:
+                            self.gpu_vendor = "Intel"
+                            self.gpu_codec = "h264_vaapi"
+                except (FileNotFoundError, subprocess.CalledProcessError):
+                    pass
+
+            if not self.gpu_vendor:
+                self.log_message("ℹ️ No discrete GPU detected or utilities missing; will use CPU.")
                 return
 
-        if 'nvidia' in gpu_name:
-            self.gpu_vendor = "NVIDIA"
-            self.gpu_codec = "h264_nvenc"
-        elif 'amd' in gpu_name:
-            self.gpu_vendor = "AMD"
-            self.gpu_codec = "h264_amf"
-        elif 'intel' in gpu_name:
-            self.gpu_vendor = "Intel"
-            self.gpu_codec = "h264_qsv"
-        
+        else:
+            # Other OS (e.g., macOS) not currently handled explicitly
+            self.log_message("ℹ️ GPU detection not implemented for this OS. Using CPU.")
+            return
+
         if self.gpu_vendor:
             self.log_message(f"✅ {self.gpu_vendor} GPU detected. Will attempt hardware acceleration.")
         else:
             self.log_message("ℹ️ No supported GPU for hardware acceleration was found. Using CPU.")
+
+    def _find_vaapi_device(self):
+        """Return a usable VA-API render node path if present, else None."""
+        dri_dir = '/dev/dri'
+        default_render = os.path.join(dri_dir, 'renderD128')
+        if os.path.exists(default_render):
+            return default_render
+        if os.path.isdir(dri_dir):
+            try:
+                for entry in sorted(os.listdir(dri_dir)):
+                    if entry.startswith('renderD'):
+                        candidate = os.path.join(dri_dir, entry)
+                        if os.path.exists(candidate):
+                            return candidate
+            except Exception:
+                return None
+        return None
 
     def parse_time_to_seconds(self, time_str):
         """Converts HH:MM:SS or seconds string to total seconds. Returns None on error or empty string."""
@@ -426,13 +477,33 @@ class KayClipperApp(ctk.CTk):
             })
 
         if self.gpu_codec and not is_audio_only:
-             self.log_message(f"🚀 Using {self.gpu_vendor} GPU for faster processing.")
-             # Arguments for ffmpeg to use hardware decoding and keep frames on GPU
-             hwaccel_args = ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda']
-             ydl_opts.setdefault('postprocessor_args', {})
-             # The key must match the postprocessor's 'key' field, which is 'FFmpegVideoConvertor'
-             # We extend the list with our hwaccel args and the encoding args
-             ydl_opts['postprocessor_args']['FFmpegVideoConvertor'] = hwaccel_args + ['-c:v', self.gpu_codec]
+            self.log_message(f"🚀 Using {self.gpu_vendor} GPU for faster processing.")
+            ffmpeg_hw_args = []
+            if sys.platform == 'win32':
+                if self.gpu_vendor == 'NVIDIA':
+                    ffmpeg_hw_args = ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda', '-c:v', self.gpu_codec]
+                elif self.gpu_vendor in ('AMD', 'Intel'):
+                    # Use D3D11VA for decode; encoders are AMF/QSV respectively
+                    ffmpeg_hw_args = ['-hwaccel', 'd3d11va', '-c:v', self.gpu_codec]
+                else:
+                    ffmpeg_hw_args = ['-c:v', self.gpu_codec]
+            elif sys.platform.startswith('linux'):
+                if self.gpu_vendor == 'NVIDIA':
+                    ffmpeg_hw_args = ['-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda', '-c:v', self.gpu_codec]
+                elif self.gpu_vendor in ('AMD', 'Intel'):
+                    vaapi_device_path = self._find_vaapi_device()
+                    if vaapi_device_path:
+                        ffmpeg_hw_args = ['-vaapi_device', vaapi_device_path, '-vf', 'format=nv12,hwupload', '-c:v', self.gpu_codec]
+                    else:
+                        ffmpeg_hw_args = ['-c:v', self.gpu_codec]
+                else:
+                    ffmpeg_hw_args = ['-c:v', self.gpu_codec]
+            else:
+                # Fallback for other OSes
+                ffmpeg_hw_args = ['-c:v', self.gpu_codec]
+
+            ydl_opts.setdefault('postprocessor_args', {})
+            ydl_opts['postprocessor_args']['FFmpegVideoConvertor'] = ffmpeg_hw_args
 
         if postprocessors:
             ydl_opts['postprocessors'] = postprocessors

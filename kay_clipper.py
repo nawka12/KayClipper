@@ -443,6 +443,7 @@ class KayClipperApp(ctk.CTk):
             'noplaylist': True,
             'progress_hooks': [self.update_progress],
             'logger': self.YTDLLogger(self),
+            'remote_components': ['ejs:github'],  # Enable challenge solver for YouTube
         }
 
         # If ffmpeg is in the system path, self.ffmpeg_path is 'ffmpeg'.
